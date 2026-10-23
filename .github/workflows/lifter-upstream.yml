@@ -1,0 +1,93 @@
+name: Watch upstream lifter
+
+# Daily: if cjrh/lifter has a release newer than the one lifter-core tracks
+# (crates/lifter-core/UPSTREAM), open a PR with the upstream changes to port.
+# Merging it releases a new Obtainit (auto-release.yml), which installed
+# copies then pick up on their own.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare with the tracked release
+        id: cmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pinned=$(sed -n 's/^release=//p' crates/lifter-core/UPSTREAM)
+          pinned_commit=$(sed -n 's/^commit=//p' crates/lifter-core/UPSTREAM)
+          latest=$(gh api repos/cjrh/lifter/releases/latest --jq .tag_name)
+          echo "tracked: $pinned  upstream: $latest"
+          if [ "$latest" = "$pinned" ]; then
+            echo "new=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          branch="lifter-sync/$latest"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "A sync PR for $latest already exists."
+            echo "new=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          commit=$(gh api "repos/cjrh/lifter/commits/$latest" --jq .sha)
+          {
+            echo "new=true"
+            echo "latest=$latest"
+            echo "commit=$commit"
+            echo "pinned=$pinned"
+            echo "pinned_commit=$pinned_commit"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open a sync pull request
+        if: steps.cmp.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.cmp.outputs.latest }}
+          COMMIT: ${{ steps.cmp.outputs.commit }}
+          PINNED: ${{ steps.cmp.outputs.pinned }}
+          PINNED_COMMIT: ${{ steps.cmp.outputs.pinned_commit }}
+          BRANCH: ${{ steps.cmp.outputs.branch }}
+        run: |
+          compare="repos/cjrh/lifter/compare/$PINNED_COMMIT...$COMMIT"
+          gh api "$compare" --jq '.commits[] | "- " + (.commit.message | split("\n")[0]) + " (" + .sha[0:7] + ")"' > commits.txt || true
+          gh api "$compare" --jq '.files[] | select(.filename | startswith("src/")) | "- `" + .filename + "` (+" + (.additions|tostring) + " −" + (.deletions|tostring) + ")"' > files.txt || true
+
+          sed -i "s/^release=.*/release=$LATEST/; s/^commit=.*/commit=$COMMIT/" crates/lifter-core/UPSTREAM
+          {
+            echo "# lifter $PINNED → $LATEST"
+            echo
+            echo "Diff: https://github.com/cjrh/lifter/compare/$PINNED_COMMIT...$COMMIT"
+            echo
+            echo "## Engine files changed upstream"
+            cat files.txt
+            echo
+            echo "## Commits"
+            cat commits.txt
+          } > crates/lifter-core/UPSTREAM_CHANGES.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add crates/lifter-core/UPSTREAM crates/lifter-core/UPSTREAM_CHANGES.md
+          git commit -m "Track lifter $LATEST"
+          git push origin "$BRANCH"
+
+          {
+            echo "lifter **$LATEST** is out (was $PINNED)."
+            echo
+            echo "lifter-core is lifter's engine restructured as a library, so upstream changes are ported by hand:"
+            echo "review the files below, apply what matters to \`crates/lifter-core\`, and push to this branch."
+            echo "**Merging this PR releases a new Obtainit automatically**, and installed copies update themselves."
+            echo
+            cat crates/lifter-core/UPSTREAM_CHANGES.md
+          } > body.md
+          gh label create lifter-sync --color 6750A4 --description "Upstream lifter update" 2>/dev/null || true
+          gh pr create --base main --head "$BRANCH" --title "Sync lifter-core with lifter $LATEST" --body-file body.md --label lifter-sync

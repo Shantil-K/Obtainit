@@ -1,0 +1,5 @@
+# The lifter release this engine tracks (github.com/cjrh/lifter).
+# Updated by .github/workflows/lifter-upstream.yml; merging that change to
+# main triggers a new Obtainit release (.github/workflows/auto-release.yml).
+release=0.9.0
+commit=ed9a50c4d94ff59f81edfd218d20cc014e853fe5

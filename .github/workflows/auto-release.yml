@@ -1,0 +1,43 @@
+name: Release after lifter sync
+
+# When a lifter sync lands on main (crates/lifter-core/UPSTREAM changed),
+# bump the patch version, tag it, and build + publish the release.
+on:
+  push:
+    branches: [main]
+    paths: ["crates/lifter-core/UPSTREAM"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bump version and tag
+        id: bump
+        run: |
+          v=$(node scripts/bump-version.mjs patch)
+          lifter=$(sed -n 's/^release=//p' crates/lifter-core/UPSTREAM)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release v$v (lifter $lifter)"
+          git tag "v$v"
+          git push origin HEAD:main "v$v"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: tag
+    uses: ./.github/workflows/build.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit
