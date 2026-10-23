@@ -26,6 +26,16 @@ jobs:
       - name: Bump version and tag
         id: bump
         run: |
+          # Only when the tracked lifter release itself changed.
+          if [ "${{ github.event_name }}" = "push" ] && \
+             ! git diff "${{ github.event.before }}" HEAD -- crates/lifter-core/UPSTREAM 2>/dev/null | grep -q '^+release='; then
+            echo "Tracked lifter release unchanged; nothing to release."
+            exit 0
+          fi
+          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            echo "First push of the repository; nothing to release."
+            exit 0
+          fi
           v=$(node scripts/bump-version.mjs patch)
           lifter=$(sed -n 's/^release=//p' crates/lifter-core/UPSTREAM)
           git config user.name "github-actions[bot]"
@@ -37,6 +47,7 @@ jobs:
 
   build:
     needs: tag
+    if: needs.tag.outputs.tag != ''
     uses: ./.github/workflows/build.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
